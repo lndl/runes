@@ -1,4 +1,3 @@
-use std::convert::TryFrom;
 use std::fmt;
 
 use mos6502::program::Program;
@@ -9,7 +8,7 @@ pub struct CPU {
     y: u8,
     sr: u8,
     sp: u8,
-    pc: u16,
+    pc: u32,
 }
 
 impl CPU {
@@ -24,15 +23,29 @@ impl CPU {
         }
     }
 
-    pub fn exec(&self, program_bytes: Vec<u8>) -> Result<(), &str> {
-        let program = Program::try_from(program_bytes)?;
+    pub fn exec(&mut self, program: Program) -> Result<(), &str> {
+        let mut i = 0;
+        while i < program.size() {
+            let instruction = program.fetch(i);
+            instruction.exec(self);
+            self.pc += instruction.bytesize() as u32;
+            i += 1;
+        }
         Ok(())
+    }
+
+    pub fn acc(&self) -> u8 {
+        self.a
+    }
+
+    pub fn set_acc(&mut self, val: u8) {
+        self.a = val;
     }
 }
 
 impl fmt::Debug for CPU {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CPU State: <a: {}, b: {}, y: {}, sr: {}, sp: {}, pc: {}>\n",
+        write!(f, "CPU State: <a: {}, b: {}, y: {}, sr: {}, sp: {}, pc: {:04x}>\n",
                self.a, self.x, self.y, self.sr, self.sp, self.pc)
     }
 }

@@ -4,7 +4,7 @@ use mos6502::cpu::CPU;
 use std::convert::TryFrom;
 
 fn main() {
-    let cpu = CPU::new();
+    let mut cpu = CPU::new();
     let bytes = [
         0xa9, 0x01,
         0x8d, 0x00, 0x02,
@@ -16,6 +16,7 @@ fn main() {
     match Program::try_from(bytes) {
         Ok(program) => {
             println!("{:?}", program);
+            cpu.exec(program);
             println!("{:?}", cpu)
         },
         Err(s)      => println!("{}", s),

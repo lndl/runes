@@ -8,11 +8,25 @@ pub struct Program {
     instructions: Vec<Box<Instruction>>
 }
 
+impl Program {
+    pub fn instructions(&self) -> &Vec<Box<Instruction>> {
+        &self.instructions
+    }
+
+    pub fn size(&self) -> u32 {
+        self.instructions.len() as u32
+    }
+
+    pub fn fetch(&self, i: u32) -> &Box<Instruction> {
+        &self.instructions[i as usize]
+    }
+}
+
 impl fmt::Debug for Program {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Program listing:\n");
         write!(f, "----------------\n");
-        for instruction in self.instructions.iter() {
+        for instruction in self.instructions() {
             write!(f, "{:?}\n", instruction);
         }
         write!(f, "\n")

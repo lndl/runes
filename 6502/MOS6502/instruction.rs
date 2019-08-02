@@ -11,7 +11,7 @@ pub trait Instruction : fmt::Debug {
 #[derive(Debug)]
 struct LDAInmediate { x: u8 }
 #[derive(Debug)]
-struct STAAbsolute { abs: u8, y: u8 }
+struct STAAbsolute { abs_l: u8, abs_h: u8 }
 #[derive(Debug)]
 struct BRK {}
 
@@ -20,14 +20,14 @@ pub fn try_build(chunk: &[u8]) -> Box<Instruction> {
 
     match bytecode {
         0xa9 => Box::new(LDAInmediate { x: chunk[1] }),
-        0x8d => Box::new(STAAbsolute { abs: chunk[1], y: chunk[2] }),
+        0x8d => Box::new(STAAbsolute { abs_l: chunk[1], abs_h: chunk[2] }),
         _    => Box::new(BRK {})
     }
 }
 
 impl Instruction for LDAInmediate {
     fn exec(&self, cpu: &mut CPU) -> () {
-        ();
+        cpu.set_acc(self.x);
     }
 
     fn bytesize(&self) -> u8 {
@@ -37,7 +37,8 @@ impl Instruction for LDAInmediate {
 
 impl Instruction for STAAbsolute {
     fn exec(&self, cpu: &mut CPU) -> () {
-        ();
+        let address = ((self.abs_h as u16) << 8) | self.abs_l as u16;
+        println!("Store current accumulator value {} in memory address: {:04x}", cpu.acc(), address);
     }
 
     fn bytesize(&self) -> u8 {
