@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::fmt;
 
 use mos6502::cpu::CPU;
+use mos6502::cpu::Flag;
 
 pub trait Instruction : fmt::Debug {
     fn exec(&self, cpu: &mut CPU) -> ();
@@ -19,6 +20,7 @@ pub fn try_build(chunk: &[u8]) -> Box<Instruction> {
     let bytecode = chunk[0];
 
     match bytecode {
+        0x00 => Box::new(BRK {}),
         0xa9 => Box::new(LDAInmediate { x: chunk[1] }),
         0x8d => Box::new(STAAbsolute { abs_l: chunk[1], abs_h: chunk[2] }),
         _    => Box::new(BRK {})
@@ -48,7 +50,7 @@ impl Instruction for STAAbsolute {
 
 impl Instruction for BRK {
     fn exec(&self, cpu: &mut CPU) -> () {
-        ();
+        cpu.set_flag(Flag::Interrupt);
     }
 
     fn bytesize(&self) -> u8 {
