@@ -24,12 +24,10 @@ impl CPU {
     }
 
     pub fn exec(&mut self, program: Program) -> Result<(), &str> {
-        let mut i = 0;
-        while i < program.size() {
-            let instruction = program.fetch(i);
+        while self.pc < program.size() {
+            let instruction = program.fetch(self.pc);
             instruction.exec(self);
             self.pc += instruction.bytesize() as u32;
-            i += 1;
         }
         Ok(())
     }
