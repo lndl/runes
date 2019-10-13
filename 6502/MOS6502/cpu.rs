@@ -2,6 +2,7 @@ use std::fmt;
 use std::collections::HashSet;
 
 use mos6502::program::Program;
+use mos6502::instruction::Executable;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Flag {
@@ -13,7 +14,6 @@ pub enum Flag {
     Overflow,
     Negative,
 }
-
 
 pub struct CPU {
     a: u8,
@@ -49,25 +49,11 @@ impl CPU {
         Ok(())
     }
 
-    pub fn acc(&self) -> u8 {
-        self.a
-    }
-
-    pub fn set_acc(&mut self, val: u8) {
-        self.a = val;
-    }
-
-    pub fn set_flag(&mut self, flag: Flag) {
-        self.flags.insert(flag);
-    }
-
-    pub fn unset_flag(&mut self, flag: Flag) {
-        self.flags.remove(&flag);
-    }
-
-    pub fn flags(&self) -> &HashSet<Flag> {
-        &self.flags
-    }
+    pub fn acc(&self) -> u8                  { self.a }
+    pub fn set_acc(&mut self, val: u8)       { self.a = val; }
+    pub fn set_flag(&mut self, flag: Flag)   { self.flags.insert(flag); }
+    pub fn unset_flag(&mut self, flag: Flag) { self.flags.remove(&flag); }
+    pub fn flags(&self) -> &HashSet<Flag>    { &self.flags }
 }
 
 impl fmt::Debug for CPU {

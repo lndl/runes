@@ -1,5 +1,6 @@
 use mos6502;
 use mos6502::instruction::Instruction;
+use mos6502::instruction::Executable;
 
 pub struct Program {
     bytestream: Vec<u8>
@@ -14,12 +15,12 @@ impl Program {
         self.bytestream.len() as u32
     }
 
-    pub fn fetch(&self, from: u32) -> Box<Instruction> {
+    pub fn fetch(&self, from: u32) -> Instruction {
         mos6502::instruction::try_build(&self.bytestream[from as usize..self.size() as usize])
     }
 
-    pub fn compile(&self) -> Vec<Box<Instruction>> {
-        let mut instructions = Vec::<Box<Instruction>>::new();
+    pub fn compile(&self) -> Vec<Instruction> {
+        let mut instructions = Vec::<Instruction>::new();
         let mut i = 0;
         let program_size = self.size();
 
