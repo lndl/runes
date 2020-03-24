@@ -2,12 +2,15 @@ use mos6502;
 use mos6502::instruction::Instruction;
 use mos6502::instruction::Executable;
 
+type DecompiledProgram = Vec<u8>;
+type CompiledProgram   = Vec<Instruction>;
+
 pub struct Program {
-    bytestream: Vec<u8>
+    bytestream: DecompiledProgram
 }
 
 impl Program {
-    pub fn new(bytestream: Vec<u8>) -> Self {
+    pub fn new(bytestream: DecompiledProgram) -> Self {
         Program { bytestream: bytestream }
     }
 
@@ -19,7 +22,7 @@ impl Program {
         mos6502::instruction::try_build(&self.bytestream[from as usize..self.size() as usize])
     }
 
-    pub fn compile(&self) -> Vec<Instruction> {
+    pub fn compile(&self) -> CompiledProgram {
         let mut instructions = Vec::<Instruction>::new();
         let mut i = 0;
         let program_size = self.size();
@@ -27,6 +30,7 @@ impl Program {
         while i < program_size {
             // Try to build the instruction
             let instruction = mos6502::instruction::try_build(&self.bytestream[i as usize..program_size as usize]);
+            println!("{:?}", instruction);
             // Advance in processing
             i = i + instruction.bytesize() as u32;
             // Push the instruction

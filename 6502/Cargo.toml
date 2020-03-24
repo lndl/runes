@@ -1,0 +1,13 @@
+[package]
+name = "runes"
+version = "0.0.1"
+authors = [ "laudleon@gmail.com" ]
+
+[[bin]]
+name = "runes"
+#path = "window.rs"
+#path = "rom_test.rs"
+path = "main.rs"
+
+[dependencies]
+sdl2 = "0.32.2"

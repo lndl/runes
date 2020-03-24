@@ -1,9 +1,13 @@
+use std::io::Result;
+
 mod mos6502;
-use mos6502::program::Program;
 use mos6502::cpu::CPU;
 use std::convert::TryFrom;
 
-fn main() {
+pub mod rom;
+use rom::Rom;
+
+fn main() -> Result<()> {
     let mut cpu = CPU::new();
     let program_bytes = [
         0xa9, 0x01,
@@ -12,10 +16,17 @@ fn main() {
         0x8d, 0x01, 0x02,
         0xa9, 0x08,
         0x8d, 0x02, 0x02,
-        0x00 ].to_vec();
+    ].to_vec();
 
-    let program = Program::new(program_bytes);
+    let rom = Rom::from_file(String::from("nestest.nes"))?;
 
-    cpu.exec(program);
-    println!("{:?}", cpu)
+    println!("---------------------------------------------------");
+    println!("{:?}", rom);
+    println!("---------------------------------------------------");
+
+    cpu.load_program(0xc000, rom.pgrrom_info().clone());
+
+    cpu.exec(0xc000);
+
+    Ok(())
 }

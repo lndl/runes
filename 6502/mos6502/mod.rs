@@ -1,3 +1,3 @@
 pub mod cpu;
-pub mod program;
 pub mod instruction;
+pub mod memory_map;
