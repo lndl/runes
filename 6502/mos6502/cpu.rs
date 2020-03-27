@@ -4,15 +4,23 @@ use std::collections::HashSet;
 use mos6502::instruction::AddressingMode;
 use mos6502::memory_map::MemoryMap;
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 enum Flag {
     Carry,
     Zero,
-    Interrupt,
+    IntDisabled,
     Decimal,
     Break,
     Overflow,
     Negative,
+}
+
+impl Flag {
+    fn values() -> Vec<Flag> {
+        //TODO: Missing BREAK
+        vec![ Self::Carry, Self::Zero, Self::IntDisabled,
+        Self::Decimal, Self::Overflow, Self::Negative ]
+    }
 }
 
 struct CPUFlags {
@@ -39,19 +47,49 @@ impl CPUFlags {
             self.flags.remove(&f);
         }
     }
+
+    fn to_byte(&self) -> u8 {
+        let mut flagsbyte = 0x20;
+        let mut index     = 1;
+        let mask          = 0b11001111;
+        for f in Flag::values() {
+            while (mask & index) != index {
+                index <<= 1;
+            }
+            if self.has_set(f) {
+                flagsbyte += index;
+            }
+            index <<= 1;
+        }
+        flagsbyte
+    }
+
+    fn from_byte(&mut self, flagsbyte: u8) {
+        let mut index = 1;
+        let mask      = 0b11001111;
+        for f in Flag::values() {
+            while (mask & index) != index {
+                index <<= 1;
+            }
+            self.set(f, (flagsbyte & index) == index);
+            index <<= 1;
+        }
+    }
 }
 
 impl fmt::Debug for CPUFlags {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use self::Flag::*;
 
-        write!(f, "{}", if self.has_set(Carry)     { "C" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Zero)      { "Z" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Interrupt) { "I" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Decimal)   { "D" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Break)     { "B" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Overflow)  { "V" } else { "-" })?;
-        write!(f, "{}", if self.has_set(Negative)  { "N" } else { "-" })
+        write!(f, "{}", if self.has_set(Negative)    { "N" } else { "-" })?;
+        write!(f, "{}", if self.has_set(Overflow)    { "V" } else { "-" })?;
+        write!(f, "_")?;
+        write!(f, "{}", if self.has_set(Break)       { "B" } else { "-" })?;
+        write!(f, "{}", if self.has_set(Decimal)     { "D" } else { "-" })?;
+        write!(f, "{}", if self.has_set(IntDisabled) { "I" } else { "-" })?;
+        write!(f, "{}", if self.has_set(Zero)        { "Z" } else { "-" })?;
+        write!(f, "{}", if self.has_set(Carry)       { "C" } else { "-" })?;
+        write!(f, " [{:02x}]", self.to_byte())
     }
 }
 
@@ -64,26 +102,37 @@ pub struct CPU {
 
     flags: CPUFlags,
 
-    mem: MemoryMap
+    mem: MemoryMap::MemoryMap,
+
+    jmp_bug: bool,
+    decimal_mode_enabled: bool
 }
 
 impl CPU {
     pub fn new() -> Self {
-        let flags = CPUFlags::new();
-        let mem = MemoryMap::new();
+        let mut flags = CPUFlags::new();
+        let mem = MemoryMap::MemoryMap::new();
+
+        flags.set(Flag::IntDisabled, true);
 
         CPU {
             a: 0,
             x: 0,
             y: 0,
-            sp: 0xFF,
+            sp: 0xFD,
             pc: 0,
             flags,
-            mem
+            mem,
+            jmp_bug: true,
+            decimal_mode_enabled: false
         }
     }
 
-    pub fn load_program(&mut self, from: u16, program: Vec<u8>) {
+    pub fn memory_map(&self) -> &MemoryMap::MemoryMap {
+        &self.mem
+    }
+
+    pub fn load_program(&mut self, from: usize, program: Vec<u8>) {
         self.mem.copy(from, program);
     }
 
@@ -92,63 +141,51 @@ impl CPU {
 
         self.pc = from_address;
         loop {
-            println!("{:?}", self);
             match Instruction::build(self.mem.from(self.pc)) {
                 Some(instruction) => {
-                    println!("Executing {:?}", instruction);
+                    println!("{:04x}: {:?} | {:?}", self.pc, instruction, self);
                     self.pc += instruction.bytesize() as u16;
                     instruction.exec(self);
                 },
                 None => {
+                    println!("{:04x}: Unknown instruction fetched: {:02x}", self.pc, self.mem.read(self.pc));
                     self.pc += 1 as u16; // Acts as NOP
                 }
             };
-            if self.mem.is_overflowing(self.pc) {
-                break
-            }
         }
 
         Ok(())
     }
 
     pub fn adc(&mut self, am: &AddressingMode) {
-        let c = self.flags.bit(Flag::Carry);
-        let m = self.read_op(am);
-        let a = self.a;
-        if self.flags.has_set(Flag::Decimal) {
-            let mut low_digit = (a as u16 & 0x0f) + (m as u16 & 0xf) + c as u16;
-            let mut has_first_carry = false;
-            if low_digit > 9 {
-                low_digit = low_digit + 6;
-                has_first_carry = true
+        let reg_a = self.a as u16;
+        let op    = self.read_op(am) as u16;
+        let carry = self.flags.has_set(Flag::Carry) as u16;
+        let result = reg_a.wrapping_add(op).wrapping_add(carry);
+
+        if self.decimal_mode_enabled && self.flags.has_set(Flag::Decimal) {
+            let mut tmp_a = (reg_a & 0x0f).wrapping_add(op & 0xf).wrapping_add(carry);
+            if tmp_a >  0x9  {
+                tmp_a = tmp_a.wrapping_add(0x6);
             }
-
-            let mut high_digit = (a as u16 >> 4) + (m as u16 >> 4);
-            let mut has_last_carry = false;
-            if has_first_carry { high_digit += 1; }
-            if high_digit > 9 {
-                high_digit = high_digit + 6;
-                has_last_carry = true;
+            if tmp_a <= 0x0f {
+                tmp_a = (tmp_a & 0xf).wrapping_add(reg_a & 0xf0).wrapping_add(op & 0xf0);
+            } else {
+                tmp_a = (tmp_a & 0xf).wrapping_add(reg_a & 0xf0).wrapping_add(op & 0xf0).wrapping_add(0x10);
             }
-
-            let r = (high_digit << 4) | (low_digit & 0x0f);
-
-            self.flags.set(Flag::Carry, has_last_carry);
-            self.flags.set(Flag::Overflow, (a ^ m) & 0x80 == 0 && (a ^ r as u8) & 0x80 == 0x80);
-            self.flags.set(Flag::Zero, a == 0);
-            self.flags.set(Flag::Negative, a < 0);
-
-            self.a = r as u8;
+            if (tmp_a & 0x1f0) > 0x90 {
+                tmp_a = tmp_a.wrapping_add(0x60);
+            }
+            self.flags.set(Flag::Carry, (tmp_a & 0xff0) > 0xf0);
+            self.flags.set(Flag::Overflow, (((reg_a ^ op) & 0x80) != 0) && (((reg_a ^ result) & 0x80) != 0));
+            self.a = tmp_a as u8;
         } else {
-          let r = a as u16 + m as u16 + c as u16;
-
-          self.flags.set(Flag::Carry, (r & 0x100) != 0);
-          self.flags.set(Flag::Overflow, (a ^ m) & 0x80 == 0 && (a ^ r as u8) & 0x80 == 0x80);
-          self.flags.set(Flag::Zero, a == 0);
-          self.flags.set(Flag::Negative, a < 0);
-
-          self.a = r as u8;
+            self.flags.set(Flag::Carry, result > 0xFF);
+            self.flags.set(Flag::Overflow, !(((reg_a ^ op) & 0x80) != 0) && (((reg_a ^ result) & 0x80) != 0));
+            self.a = result as u8;
         }
+        self.check_nf_with(result as u8);
+        self.check_zf_with(result as u8);
     }
 
     pub fn and(&mut self, am: &AddressingMode) {
@@ -160,9 +197,11 @@ impl CPU {
 
     pub fn asl(&mut self, am: &AddressingMode) {
         let mut o = self.read_op(am);
-        self.check_nf_with(o);
-        o = o << 0;
+        self.flags.set(Flag::Carry, (o & 0x80) == 0x80);
+        o <<= 1;
         self.write_op(am, o);
+        self.check_nf_with(o);
+        self.check_zf_with(o);
     }
 
     pub fn bcc(&mut self, am: &AddressingMode) {
@@ -178,10 +217,11 @@ impl CPU {
     }
 
     pub fn bit(&mut self, am: &AddressingMode) {
-        let t = self.a & self.read_op(am);
-        self.flags.set(Flag::Zero, t == 0);
-        self.flags.set(Flag::Negative, (t & 0x8) == 1);
-        self.flags.set(Flag::Overflow, (t & 0x4) == 1);
+        let m = self.read_op(am);
+        //println!("mem value read: {:02x}", m);
+        self.flags.set(Flag::Zero, (self.a & m) == 0);
+        self.flags.set(Flag::Negative, (m & 0x80) == 0x80);
+        self.flags.set(Flag::Overflow, (m & 0x40) == 0x40);
     }
 
     pub fn bmi(&mut self, am: &AddressingMode) {
@@ -197,8 +237,14 @@ impl CPU {
     }
 
     pub fn brk(&mut self, _am: &AddressingMode) {
-        // TODO
-        println!("BRK opcode not implemented!");
+        // Push PC
+        self.push_st_16(self.pc);
+        // Push Flags
+        self.push_st_8(self.flags.to_byte());
+        // Set PC to IntDisabled Vector address
+        self.pc = MemoryMap::INTVECADR;
+        // Set Flag
+        self.flags.set(Flag::Break, true);
     }
 
     pub fn bvc(&mut self, am: &AddressingMode) {
@@ -218,7 +264,7 @@ impl CPU {
     }
 
     pub fn cli(&mut self, _am: &AddressingMode) {
-        self.flags.set(Flag::Interrupt, false);
+        self.flags.set(Flag::IntDisabled, false);
     }
 
     pub fn clv(&mut self, _am: &AddressingMode) {
@@ -238,23 +284,23 @@ impl CPU {
     }
 
     pub fn dec(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) - 1;
+        let r = self.read_op(am).wrapping_sub(1);
         self.write_op(am, r);
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
-    pub fn dex(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) - 1;
+    pub fn dex(&mut self, _am: &AddressingMode) {
+        let r = self.x.wrapping_sub(1);
         self.x = r;
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
-    pub fn dey(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) - 1;
+    pub fn dey(&mut self, _am: &AddressingMode) {
+        let r = self.y.wrapping_sub(1);
         self.y = r;
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
@@ -266,33 +312,36 @@ impl CPU {
     }
 
     pub fn inc(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) + 1;
+        let r = self.read_op(am).wrapping_add(1);
         self.write_op(am, r);
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
     pub fn inx(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) + 1;
+        let r = self.read_op(am).wrapping_add(1);
         self.x = r;
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
     pub fn iny(&mut self, am: &AddressingMode) {
-        let r = self.read_op(am) + 1;
+        let r = self.read_op(am).wrapping_add(1);
         self.y = r;
-        self.check_zf_with(r);
+        self.check_nf_with(r);
         self.check_zf_with(r);
     }
 
     pub fn jmp(&mut self, am: &AddressingMode) {
-        self.pc = self.resolve_mem_address(am);
+        let new_pc = self.resolve_mem_address(am);
+        self.pc = new_pc;
     }
 
     pub fn jsr(&mut self, am: &AddressingMode) {
+        let ret_at = self.pc - 1;
+        //  println!("I push {:04x}, but I will return to {:04x}", ret_at, ret_at + 1);
+        self.push_st_16(ret_at);
         self.pc = self.resolve_mem_address(am);
-        println!("JSR: TODO push onto stack return address!");
     }
 
     pub fn lda(&mut self, am: &AddressingMode) {
@@ -300,6 +349,9 @@ impl CPU {
         self.a = r;
         self.check_nf_with(r);
         self.check_zf_with(r);
+        if self.pc == 0xd95b {
+//            self.crash_and_dump();
+        }
     }
 
     pub fn ldx(&mut self, am: &AddressingMode) {
@@ -320,7 +372,7 @@ impl CPU {
         let op = self.read_op(am);
         let r =  op >> 1;
         self.write_op(am, r);
-        self.flags.set(Flag::Carry, (op & 0x01) == 1);
+        self.flags.set(Flag::Carry, (op & 0x01) == 0x01);
         self.check_nf_with(r);
         self.check_zf_with(r);
     }
@@ -336,29 +388,29 @@ impl CPU {
         self.check_zf_with(r);
     }
 
-    pub fn pha(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("PHA opcode not implemented!");
+    pub fn pha(&mut self, _am: &AddressingMode) {
+        self.push_st_8(self.a);
     }
 
-    pub fn php(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("PHP opcode not implemented!");
+    pub fn php(&mut self, _am: &AddressingMode) {
+        self.push_st_8(self.flags.to_byte());
     }
 
-    pub fn pla(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("PLA opcode not implemented!");
+    pub fn pla(&mut self, _am: &AddressingMode) {
+        let r = self.pop_st_8();
+        self.a = r;
+        self.check_nf_with(r);
+        self.check_zf_with(r);
     }
 
-    pub fn plp(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("PLP opcode not implemented!");
+    pub fn plp(&mut self, _am: &AddressingMode) {
+        let flagsbyte = self.pop_st_8();
+        self.flags.from_byte(flagsbyte);
     }
 
     pub fn rol(&mut self, am: &AddressingMode) {
         let op = self.read_op(am);
-        let has_new_carry = (op & 0xf0) == 1;
+        let has_new_carry = (op & 0x80) == 0x80;
         let mut r =  op << 1;
         r = r | self.flags.bit(Flag::Carry);
         self.write_op(am, r);
@@ -369,7 +421,7 @@ impl CPU {
 
     pub fn ror(&mut self, am: &AddressingMode) {
         let op = self.read_op(am);
-        let has_new_carry = (op & 0x01) == 1;
+        let has_new_carry = (op & 0x01) == 0x01;
         let mut r =  op >> 1;
         r = r | (self.flags.bit(Flag::Carry) << 7);
         self.write_op(am, r);
@@ -378,19 +430,44 @@ impl CPU {
         self.check_zf_with(r);
     }
 
-    pub fn rti(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("RTI opcode not implemented!");
+    pub fn rti(&mut self, _am: &AddressingMode) {
+        // Retrive Program Flags
+        let flagsbyte = self.pop_st_8();
+        self.flags.from_byte(flagsbyte);
+        // Retrieve PC
+        self.pc = self.pop_st_16();
     }
 
-    pub fn rts(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("RTS opcode not implemented!");
+    pub fn rts(&mut self, _am: &AddressingMode) {
+        let new_pc = self.pop_st_16() + 1;
+        // println!("I pulled {:04x}, but I will come back to {:04x}", new_pc - 1, new_pc);
+        self.pc = new_pc;
     }
 
     pub fn sbc(&mut self, am: &AddressingMode) {
-        // TODO
-        println!("SBC opcode not implemented!");
+        let reg_a = self.a as u16;
+        let op    = self.read_op(am) as u16;
+        let carry = !self.flags.has_set(Flag::Carry) as u16;
+        let result = reg_a.wrapping_sub(op).wrapping_sub(carry);
+
+        if self.decimal_mode_enabled && self.flags.has_set(Flag::Decimal) {
+            let mut tmp_a = (reg_a & 0xf).wrapping_sub(op & 0xf).wrapping_sub(carry);
+            if (tmp_a & 0x10) != 0 {
+                tmp_a = ((tmp_a.wrapping_sub(6)) & 0xf) | ((reg_a & 0xf0).wrapping_sub(op & 0xf0).wrapping_sub(0x10));
+            } else {
+                tmp_a = (tmp_a & 0xf) | (reg_a & 0xf0).wrapping_sub(op & 0xf0);
+            }
+            if (tmp_a & 0x100) != 0 {
+                tmp_a = tmp_a.wrapping_sub( 0x60 );
+            }
+            self.a = tmp_a as u8;
+        } else {
+            self.a = result as u8;
+        }
+        self.check_nf_with(result as u8);
+        self.check_zf_with(result as u8);
+        self.flags.set(Flag::Overflow, (((reg_a ^ op) & 0x80) != 0) && (((reg_a ^ result) & 0x80) != 0));
+        self.flags.set(Flag::Carry, result < 0x100);
     }
 
     pub fn sec(&mut self, _am: &AddressingMode) {
@@ -402,7 +479,7 @@ impl CPU {
     }
 
     pub fn sei(&mut self, _am: &AddressingMode) {
-        self.flags.set(Flag::Interrupt, true);
+        self.flags.set(Flag::IntDisabled, true);
     }
 
     pub fn sta(&mut self, am: &AddressingMode) {
@@ -417,37 +494,35 @@ impl CPU {
         self.write_op(am, self.y);
     }
 
-    pub fn tax(&mut self, am: &AddressingMode) {
+    pub fn tax(&mut self, _am: &AddressingMode) {
         self.x = self.a;
         self.check_nf_with(self.x);
         self.check_zf_with(self.x);
     }
 
-    pub fn tay(&mut self, am: &AddressingMode) {
+    pub fn tay(&mut self, _am: &AddressingMode) {
         self.y = self.a;
         self.check_nf_with(self.y);
         self.check_zf_with(self.y);
     }
 
-    pub fn tsx(&mut self, am: &AddressingMode) {
+    pub fn tsx(&mut self, _am: &AddressingMode) {
         self.x = self.sp;
         self.check_nf_with(self.x);
         self.check_zf_with(self.x);
     }
 
-    pub fn txa(&mut self, am: &AddressingMode) {
+    pub fn txa(&mut self, _am: &AddressingMode) {
         self.a = self.x;
         self.check_nf_with(self.a);
         self.check_zf_with(self.a);
     }
 
-    pub fn txs(&mut self, am: &AddressingMode) {
+    pub fn txs(&mut self, _am: &AddressingMode) {
         self.sp = self.x;
-        self.check_nf_with(self.sp);
-        self.check_zf_with(self.sp);
     }
 
-    pub fn tya(&mut self, am: &AddressingMode) {
+    pub fn tya(&mut self, _am: &AddressingMode) {
         self.a = self.y;
         self.check_nf_with(self.a);
         self.check_zf_with(self.a);
@@ -455,16 +530,51 @@ impl CPU {
 
     // Unofficial instructions
 
+    pub fn axs(&mut self, _am: &AddressingMode) {
+        println!("AXS opcode not implemented!");
+    }
+
+    pub fn dcp(&mut self, am: &AddressingMode) {
+        self.dec(am);
+        self.cmp(am);
+    }
+
+    pub fn isb(&mut self, am: &AddressingMode) {
+        self.inc(am);
+        self.sbc(am);
+    }
+
     pub fn lax(&mut self, am: &AddressingMode) {
-        println!("LAX opcode not implemented!");
+        let r = self.read_op(am);
+        self.a = r;
+        self.x = r;
+        self.check_nf_with(r);
+        self.check_zf_with(r);
+    }
+
+    pub fn rla(&mut self, am: &AddressingMode) {
+        self.rol(am);
+        self.and(am);
+    }
+
+    pub fn rra(&mut self, am: &AddressingMode) {
+        self.ror(am);
+        self.adc(am);
     }
 
     pub fn sax(&mut self, am: &AddressingMode) {
-        println!("SAX opcode not implemented!");
+        let r = self.x & self.a;
+        self.write_op(am, r);
     }
 
-    pub fn axs(&mut self, am: &AddressingMode) {
-        println!("AXS opcode not implemented!");
+    pub fn slo(&mut self, am: &AddressingMode) {
+        self.asl(am);
+        self.ora(am);
+    }
+
+    pub fn sre(&mut self, am: &AddressingMode) {
+        self.lsr(am);
+        self.eor(am);
     }
 
     // Private methods
@@ -473,7 +583,7 @@ impl CPU {
         let m = self.read_op(am);
         let c = reg.wrapping_sub(m);
         self.flags.set(Flag::Carry, reg >= m);
-        self.check_zf_with(c);
+        self.check_nf_with(c);
         self.check_zf_with(c);
     }
 
@@ -488,7 +598,7 @@ impl CPU {
     }
 
     fn check_nf_with(&mut self, val: u8) {
-        self.flags.set(Flag::Negative, (val & 0xf0) == 1);
+        self.flags.set(Flag::Negative, (val & 0x80) == 0x80);
     }
 
     fn read_op(&self, am: &AddressingMode) -> u8 {
@@ -507,6 +617,33 @@ impl CPU {
                 _ => panic!("Exhausted addressing modes in #read_op")
             }
         }
+    }
+
+    fn push_st_16(&mut self, value: u16) {
+        let hi = (value >> 8) as u8;
+        self.push_st_8(hi);
+        let lo = value as u8;
+        self.push_st_8(lo);
+    }
+
+    fn pop_st_16(&mut self) -> u16 {
+        let lo = self.pop_st_8();
+        let hi = self.pop_st_8();
+        (((hi as u16) << 8) | lo as u16)
+    }
+
+    fn push_st_8(&mut self, value: u8) -> u8 {
+        let stack = self.mem.portion_for("stack");
+        stack[self.sp as usize] = value;
+        self.sp -= 1;
+        value
+    }
+
+    fn pop_st_8(&mut self) -> u8 {
+        let stack = self.mem.portion_for("stack");
+        self.sp += 1;
+        let value = stack[self.sp as usize];
+        value
     }
 
     fn write_op(&mut self, am: &AddressingMode, value: u8) -> u8 {
@@ -542,6 +679,13 @@ impl CPU {
         use self::AddressingMode::*;
 
         let address8to16 = |l: u8, h: u8| ((h as u16) << 8) | l as u16;
+        let hi_byte_adr_from = |lo_byte_adr: u16, l: u8, h: u8| {
+            if self.jmp_bug && l == 0xff {
+                address8to16(0, h)
+            } else {
+                lo_byte_adr + 1
+            }
+        };
 
         match *am {
             Abs { l, h } => {
@@ -549,11 +693,11 @@ impl CPU {
                 address
             },
             AbsX { l, h } => {
-                let address = address8to16(l, h) + address8to16(self.x, 0);
+                let address = address8to16(l, h).wrapping_add(address8to16(self.x, 0));
                 address
             },
             AbsY { l, h } => {
-                let address = address8to16(l, h) + address8to16(self.y, 0);
+                let address = address8to16(l, h).wrapping_add(address8to16(self.y, 0));
                 address
             },
             ZeroPage { o } => {
@@ -574,34 +718,39 @@ impl CPU {
             },
             Indirect { l, h } => {
                 let ind_address = address8to16(l, h);
-                let li = self.mem.read(ind_address);
-                let hi = self.mem.read(ind_address + 1);
-                let address = address8to16(li, hi);
+                let lo = self.mem.read(ind_address);
+                let hi = self.mem.read(hi_byte_adr_from(ind_address, l, h));
+                let address = address8to16(lo, hi);
                 address
             },
             IndirectIndexed { a } => {
                 let ind_address = address8to16(a, 0);
-                let l_address = self.mem.read(ind_address);
-                let h_address = self.mem.read(ind_address + 1);
-                let address = address8to16(l_address, h_address) + address8to16(self.y, 0);
+                let lo = self.mem.read(ind_address);
+                let hi = self.mem.read(hi_byte_adr_from(ind_address, a, 0));
+                let address = address8to16(lo, hi).wrapping_add(address8to16(self.y, 0));
                 address
             },
             IndexedIndirect { a } => {
-                let ind_address = address8to16(a.wrapping_add(self.x), 0);
-                println!("{:x}", ind_address);
-                let l_address = self.mem.read(ind_address);
-                let h_address = self.mem.read(ind_address + 1);
-                let address = address8to16(l_address, h_address);
+                let lo_byte_adr = a.wrapping_add(self.x);
+                let ind_address = address8to16(lo_byte_adr, 0);
+                let lo = self.mem.read(ind_address);
+                let hi = self.mem.read(hi_byte_adr_from(ind_address, lo_byte_adr, 0));
+                let address = address8to16(lo, hi);
                 address
             },
             _ => panic!("{} is not a memory type address mode")
         }
     }
+
+    fn crash_and_dump(&self) {
+        println!("{:?}", self.mem);
+        panic!("Forced crash!");
+    }
 }
 
 impl fmt::Debug for CPU {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CPU State: <a: {:02x}, x: {:02x}, y: {:02x}, flags: {:?}, sp: {:02x}, pc: {:04x}>\n",
-               self.a, self.x, self.y, self.flags, self.sp, self.pc)
+        write!(f, "<a: {:02x}, x: {:02x}, y: {:02x}, flags: {:?}, sp: {:02x}, pc: {:04x}>",
+            self.a, self.x, self.y, self.flags, self.sp, self.pc)
     }
 }

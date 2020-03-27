@@ -20,11 +20,15 @@ fn main() -> Result<()> {
 
     let rom = Rom::from_file(String::from("nestest.nes"))?;
 
+    /*
     println!("---------------------------------------------------");
     println!("{:?}", rom);
     println!("---------------------------------------------------");
+    */
 
     cpu.load_program(0xc000, rom.pgrrom_info().clone());
+
+//    println!("{:?}", cpu.memory_map());
 
     cpu.exec(0xc000);
 
