@@ -4,10 +4,11 @@ use mos6502::cpu::CPU;
 
 #[derive(Debug)]
 enum Opcode {
-    ADC, AND, ASL, AXS, BCC, BCS, BEQ, BIT, BMI, BNE, BPL, BRK, BVC, BVS, CLC,
-    CLD, CLI, CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY, EOR, INC, INX, INY, ISB, JMP, JSR,
-    LAX, LDA, LDX, LDY, LSR, NOP, ORA, PHA, PHP, PLA, PLP, RLA, ROL, ROR, RRA, RTI, RTS,
-    SAX, SBC, SEC, SED, SEI, SLO, SRE, STA, STX, STY, TAX, TAY, TSX, TXA, TXS, TYA, ___
+    ADC, AND, ASL, BCC, BCS, BEQ, BIT, BMI, BNE, BPL, BRK, BVC, BVS, CLC, CLD, CLI,
+    CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY, EOR, INC, INX, INY, ISB, JMP, JSR, LAX,
+    LDA, LDX, LDY, LSR, NOP, ORA, PHA, PHP, PLA, PLP, RLA, ROL, ROR, RRA, RTI, RTS,
+    SAX, SBC, SEC, SED, SEI, SLO, SRE, STA, STX, STY, TAX, TAY, TSX, TXA, TXS, TYA,
+    ___
 }
 
 pub enum AddressingMode {
@@ -34,6 +35,7 @@ impl AddressingMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn has_to_access_registers(&self) -> bool {
         match *self {
             AccA | AccX | AccY | AccSP => true,
@@ -364,8 +366,6 @@ instructions_map!(
     0x57 => SRE | zero_page_x | sre,
     0x5B => SRE | absy | sre,
     0x5F => SRE | absx | sre,
-    // Alternative name: SBX, SAX
-    0xCB => AXS | imm8 | axs,
     // NOPs unofficial
     0x04 => NOP | zero_page | nop,
     0x44 => NOP | zero_page | nop,

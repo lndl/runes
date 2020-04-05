@@ -1,8 +1,9 @@
 use std::fmt;
 use std::collections::HashSet;
+use std::ops::Range;
 
 use mos6502::instruction::AddressingMode;
-use mos6502::memory_map::MemoryMap;
+use mos6502::memory_map::*;
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 enum Flag {
@@ -93,7 +94,7 @@ impl fmt::Debug for CPUFlags {
     }
 }
 
-pub struct CPU {
+pub struct CPU<'a> {
     a: u8,
     x: u8,
     y: u8,
@@ -102,16 +103,16 @@ pub struct CPU {
 
     flags: CPUFlags,
 
-    mem: MemoryMap::MemoryMap,
+    mem: memory_map::MemoryMap<'a>,
 
     jmp_bug: bool,
     decimal_mode_enabled: bool
 }
 
-impl CPU {
+impl<'a> CPU<'a> {
     pub fn new() -> Self {
         let mut flags = CPUFlags::new();
-        let mem = MemoryMap::MemoryMap::new();
+        let mem = memory_map::MemoryMap::new();
 
         flags.set(Flag::IntDisabled, true);
 
@@ -128,33 +129,25 @@ impl CPU {
         }
     }
 
-    pub fn memory_map(&self) -> &MemoryMap::MemoryMap {
-        &self.mem
-    }
-
-    pub fn load_program(&mut self, from: usize, program: Vec<u8>) {
-        self.mem.copy(from, program);
+    pub fn mount_mapper(&mut self, mem_range: Range<u16>, mapper: &'a mut [u8]) {
+        self.mem.register_mapper(mem_range, mapper);
     }
 
     pub fn exec(&mut self, from_address: u16) -> Result<(), &str> {
-        use mos6502::instruction::Instruction;
-
         self.pc = from_address;
         loop {
-            match Instruction::build(self.mem.from(self.pc)) {
+            match self.mem.fetch_instruction(self.pc) {
                 Some(instruction) => {
                     println!("{:04x}: {:?} | {:?}", self.pc, instruction, self);
-                    self.pc += instruction.bytesize() as u16;
+                    self.pc = self.pc.wrapping_add(instruction.bytesize() as u16);
                     instruction.exec(self);
                 },
                 None => {
                     println!("{:04x}: Unknown instruction fetched: {:02x}", self.pc, self.mem.read(self.pc));
-                    self.pc += 1 as u16; // Acts as NOP
+                    self.pc += 1; // Acts as NOP
                 }
             };
         }
-
-        Ok(())
     }
 
     pub fn adc(&mut self, am: &AddressingMode) {
@@ -218,7 +211,6 @@ impl CPU {
 
     pub fn bit(&mut self, am: &AddressingMode) {
         let m = self.read_op(am);
-        //println!("mem value read: {:02x}", m);
         self.flags.set(Flag::Zero, (self.a & m) == 0);
         self.flags.set(Flag::Negative, (m & 0x80) == 0x80);
         self.flags.set(Flag::Overflow, (m & 0x40) == 0x40);
@@ -242,7 +234,7 @@ impl CPU {
         // Push Flags
         self.push_st_8(self.flags.to_byte());
         // Set PC to IntDisabled Vector address
-        self.pc = MemoryMap::INTVECADR;
+        self.pc = memory_map::INTVECADR;
         // Set Flag
         self.flags.set(Flag::Break, true);
     }
@@ -339,7 +331,6 @@ impl CPU {
 
     pub fn jsr(&mut self, am: &AddressingMode) {
         let ret_at = self.pc - 1;
-        //  println!("I push {:04x}, but I will return to {:04x}", ret_at, ret_at + 1);
         self.push_st_16(ret_at);
         self.pc = self.resolve_mem_address(am);
     }
@@ -349,9 +340,6 @@ impl CPU {
         self.a = r;
         self.check_nf_with(r);
         self.check_zf_with(r);
-        if self.pc == 0xd95b {
-//            self.crash_and_dump();
-        }
     }
 
     pub fn ldx(&mut self, am: &AddressingMode) {
@@ -440,7 +428,6 @@ impl CPU {
 
     pub fn rts(&mut self, _am: &AddressingMode) {
         let new_pc = self.pop_st_16() + 1;
-        // println!("I pulled {:04x}, but I will come back to {:04x}", new_pc - 1, new_pc);
         self.pc = new_pc;
     }
 
@@ -529,10 +516,6 @@ impl CPU {
     }
 
     // Unofficial instructions
-
-    pub fn axs(&mut self, _am: &AddressingMode) {
-        println!("AXS opcode not implemented!");
-    }
 
     pub fn dcp(&mut self, am: &AddressingMode) {
         self.dec(am);
@@ -633,17 +616,14 @@ impl CPU {
     }
 
     fn push_st_8(&mut self, value: u8) -> u8 {
-        let stack = self.mem.portion_for("stack");
-        stack[self.sp as usize] = value;
+        self.mem.push_to_stack(self.sp, value);
         self.sp -= 1;
         value
     }
 
     fn pop_st_8(&mut self) -> u8 {
-        let stack = self.mem.portion_for("stack");
         self.sp += 1;
-        let value = stack[self.sp as usize];
-        value
+        self.mem.peek_from_stack(self.sp)
     }
 
     fn write_op(&mut self, am: &AddressingMode, value: u8) -> u8 {
@@ -742,13 +722,14 @@ impl CPU {
         }
     }
 
+    #[allow(dead_code)]
     fn crash_and_dump(&self) {
         println!("{:?}", self.mem);
         panic!("Forced crash!");
     }
 }
 
-impl fmt::Debug for CPU {
+impl<'a> fmt::Debug for CPU<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<a: {:02x}, x: {:02x}, y: {:02x}, flags: {:?}, sp: {:02x}, pc: {:04x}>",
             self.a, self.x, self.y, self.flags, self.sp, self.pc)

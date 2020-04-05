@@ -1,75 +1,89 @@
-pub mod MemoryMap {
+pub mod memory_map {
     use std::fmt;
     use std::ops::Range;
+    use std::collections::HashMap;
+    use std::cell::RefCell;
 
-    const MM_SIZE: usize = 65536;
+    use mos6502::instruction::Instruction;
 
-    pub const STKRANGE : Range<usize> = 0x0100..0x0200;
+    pub const STKBASE : u16 = 0x1ff;
     pub const INTVECADR : u16 = 0xfffe;
 
-    pub struct MemoryMap {
-        mm: [u8; MM_SIZE]
+    pub struct MemoryMap<'a> {
+        mappers: HashMap<Range<u16>, RefCell<&'a mut [u8]>>,
     }
 
-    impl MemoryMap {
-        pub fn new() -> MemoryMap {
+    impl<'a> MemoryMap<'a> {
+        pub fn new() -> MemoryMap<'a> {
             MemoryMap {
-                mm: [0xEA; MM_SIZE] // Fill mem with NOPs
+                mappers: HashMap::new()
             }
         }
 
-        pub fn is_overflowing(&self, index: usize) -> bool {
-            index  >= self.mm.len()
+        pub fn register_mapper(&mut self, mem_range: Range<u16>, mapper: &'a mut [u8]) {
+            self.mappers.insert(mem_range, RefCell::new(mapper));
         }
 
-        pub fn copy<S>(&mut self, from: usize, stream: S) where S : IntoIterator<Item=u8> {
-            let mut index = from;
-            for byte in stream.into_iter() {
-                if self.is_overflowing(index) {
-                    println!("MemoryMap#copy has overflowed!");
-                    break;
-                }
-                self.mm[index as usize] = byte;
-                index += 1;
-            }
-        }
-
-        pub fn register(&self, key: &str, range: Range<u16>) {
-
-        }
-
-        pub fn portion_for(&mut self, key: &str) -> &mut [u8] {
-            &mut self.mm[STKRANGE]
-        }
-
-        pub fn write(&mut self, address: u16, value: u8) -> u8 {
-            self.mm[address as usize] = value;
+        pub fn push_to_stack(&mut self, sp: u8, value: u8) -> u8 {
+            self.write(STKBASE - (0xFF - sp) as u16, value);
             value
         }
 
-        pub fn read(&self, address: u16) -> u8 {
-            self.mm[address as usize]
+        pub fn peek_from_stack(&self, sp: u8) -> u8 {
+            self.read(STKBASE - (0xFF - sp) as u16)
         }
 
-        pub fn from(&self, from_address: u16) -> &[u8] {
-            &self.mm[from_address as usize..self.mm.len()]
+        pub fn read(&self, address: u16) -> u8 {
+            self.mapper_for(address).borrow()[self.address_inside_mapper(address) as usize]
         }
+
+        pub fn write(&mut self, address: u16, value: u8) -> u8 {
+            self.mapper_for(address).borrow_mut()[self.address_inside_mapper(address) as usize] = value;
+            value
+        }
+
+        pub fn fetch_instruction(&self, address: u16) -> Option<Instruction> {
+            let program_sector = self.mapper_for(address).borrow();
+            let chunk = &program_sector[self.address_inside_mapper(address) as usize..program_sector.len()];
+            Instruction::build(chunk)
+        }
+
+        pub fn mapper_for(&self, address: u16) -> &RefCell<&'a mut [u8]> {
+            for (mem_range, mapper) in &self.mappers {
+                if mem_range.contains(&address) {
+                    return mapper
+                }
+            }
+            panic!("Invalid access from 0x{:04x}", address)
+        }
+
+        fn address_inside_mapper(&self, address: u16) -> u16 {
+            for (mem_range, _) in &self.mappers {
+                if mem_range.contains(&address) {
+                    return address - mem_range.start
+                }
+            }
+            panic!("Invalid translation from requested address 0x{:04x}", address)
+        }
+
     }
 
-    impl fmt::Debug for MemoryMap {
+    impl<'a> fmt::Debug for MemoryMap<'a> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "Memory Dump:\n")?;
-            write!(f, "---------------------------------------------------------\n");
-            for line in 0..(MM_SIZE / 16) {
-                let line_no = line * 16;
-                let line_bytes : &Vec<std::string::String> = &self.mm[line_no..(line_no + 16)].to_vec()
-                    .into_iter().map(|x| format!("{:02x}", x)).collect();
-
-
-                write!(f, "{:04x}: {}\n", line_no, line_bytes.join(" "));
+            write!(f, "================================================================================\n")?;
+            let mut mem_ranges : Vec<_> = self.mappers.keys().clone().into_iter().collect();
+            mem_ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
+            for mem_range in mem_ranges  {
+                let mem_range : Vec<_> = mem_range.clone().collect();
+                for mem_chunk in mem_range.chunks(16) {
+                    let line : Vec<std::string::String> = mem_chunk.into_iter()
+                        .map(|x| format!("{:02x}", self.read(*x))).collect();
+                    write!(f, "{:04x}: {}\n", mem_chunk[0], line.join(" "))?;
+                }
+                write!(f, "<<<<<<<<<<<<<< SKIP >>>>>>>>>>>>>>\n")?;
             }
-            write!(f, "\n")?;
-            write!(f, "---------------------------------------------------------\n")
+            write!(f, "================================================================================\n")
         }
     }
 }
