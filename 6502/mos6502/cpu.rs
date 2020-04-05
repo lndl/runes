@@ -111,10 +111,8 @@ pub struct CPU<'a> {
 
 impl<'a> CPU<'a> {
     pub fn new() -> Self {
-        let mut flags = CPUFlags::new();
+        let flags = CPUFlags::new();
         let mem = memory_map::MemoryMap::new();
-
-        flags.set(Flag::IntDisabled, true);
 
         CPU {
             a: 0,
@@ -129,12 +127,26 @@ impl<'a> CPU<'a> {
         }
     }
 
-    pub fn mount_mapper(&mut self, mem_range: Range<u16>, mapper: &'a mut [u8]) {
+    pub fn reset(&mut self) {
+        self.pc = self.fetch_address_from_vector(memory_map::RESETVECADR);
+        self.a = 0;
+        self.x = 0;
+        self.y = 0;
+        self.sp = 0xFD;
+        // TODO: Implement!
+        // self.flags.reset();
+        // self.mem.reset();
+    }
+
+    pub fn mount_mapper(&mut self, mem_range: Range<usize>, mapper: &'a mut [u8]) {
         self.mem.register_mapper(mem_range, mapper);
     }
 
-    pub fn exec(&mut self, from_address: u16) -> Result<(), &str> {
-        self.pc = from_address;
+    pub fn exec(&mut self, from_address: Option<u16>) -> Result<(), &str> {
+        match from_address {
+            Some(address) => self.pc = address,
+                     None => self.reset()
+        }
         loop {
             match self.mem.fetch_instruction(self.pc) {
                 Some(instruction) => {
@@ -233,9 +245,10 @@ impl<'a> CPU<'a> {
         self.push_st_16(self.pc);
         // Push Flags
         self.push_st_8(self.flags.to_byte());
-        // Set PC to IntDisabled Vector address
-        self.pc = memory_map::INTVECADR;
-        // Set Flag
+        // Set PC to Interruption Vector address
+        self.pc = self.fetch_address_from_vector(memory_map::INTVECADR);
+        // Set Flags
+        self.flags.set(Flag::IntDisabled, true);
         self.flags.set(Flag::Break, true);
     }
 
@@ -721,6 +734,13 @@ impl<'a> CPU<'a> {
             _ => panic!("{} is not a memory type address mode")
         }
     }
+
+    fn fetch_address_from_vector(&self, vector: u16) -> u16 {
+        let lo = self.mem.read(vector);
+        let hi = self.mem.read(vector + 1);
+        ((hi as u16) << 8) | lo as u16
+    }
+
 
     #[allow(dead_code)]
     fn crash_and_dump(&self) {

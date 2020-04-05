@@ -6,11 +6,12 @@ pub mod memory_map {
 
     use mos6502::instruction::Instruction;
 
-    pub const STKBASE : u16 = 0x1ff;
+    pub const STKBASE : u16 = 0x100;
     pub const INTVECADR : u16 = 0xfffe;
+    pub const RESETVECADR : u16 = 0xfffc;
 
     pub struct MemoryMap<'a> {
-        mappers: HashMap<Range<u16>, RefCell<&'a mut [u8]>>,
+        mappers: HashMap<Range<usize>, RefCell<&'a mut [u8]>>,
     }
 
     impl<'a> MemoryMap<'a> {
@@ -20,17 +21,17 @@ pub mod memory_map {
             }
         }
 
-        pub fn register_mapper(&mut self, mem_range: Range<u16>, mapper: &'a mut [u8]) {
+        pub fn register_mapper(&mut self, mem_range: Range<usize>, mapper: &'a mut [u8]) {
             self.mappers.insert(mem_range, RefCell::new(mapper));
         }
 
         pub fn push_to_stack(&mut self, sp: u8, value: u8) -> u8 {
-            self.write(STKBASE - (0xFF - sp) as u16, value);
+            self.write(STKBASE + sp as u16, value);
             value
         }
 
         pub fn peek_from_stack(&self, sp: u8) -> u8 {
-            self.read(STKBASE - (0xFF - sp) as u16)
+            self.read(STKBASE + sp as u16)
         }
 
         pub fn read(&self, address: u16) -> u8 {
@@ -49,6 +50,7 @@ pub mod memory_map {
         }
 
         pub fn mapper_for(&self, address: u16) -> &RefCell<&'a mut [u8]> {
+            let address = address as usize;
             for (mem_range, mapper) in &self.mappers {
                 if mem_range.contains(&address) {
                     return mapper
@@ -57,7 +59,8 @@ pub mod memory_map {
             panic!("Invalid access from 0x{:04x}", address)
         }
 
-        fn address_inside_mapper(&self, address: u16) -> u16 {
+        fn address_inside_mapper(&self, address: u16) -> usize {
+            let address = address as usize;
             for (mem_range, _) in &self.mappers {
                 if mem_range.contains(&address) {
                     return address - mem_range.start
@@ -78,7 +81,7 @@ pub mod memory_map {
                 let mem_range : Vec<_> = mem_range.clone().collect();
                 for mem_chunk in mem_range.chunks(16) {
                     let line : Vec<std::string::String> = mem_chunk.into_iter()
-                        .map(|x| format!("{:02x}", self.read(*x))).collect();
+                        .map(|x| format!("{:02x}", self.read(*x as u16))).collect();
                     write!(f, "{:04x}: {}\n", mem_chunk[0], line.join(" "))?;
                 }
                 write!(f, "<<<<<<<<<<<<<< SKIP >>>>>>>>>>>>>>\n")?;
