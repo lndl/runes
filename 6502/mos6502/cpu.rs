@@ -94,7 +94,7 @@ impl fmt::Debug for CPUFlags {
     }
 }
 
-pub struct CPU<'a> {
+pub struct CPU {
     a: u8,
     x: u8,
     y: u8,
@@ -103,13 +103,13 @@ pub struct CPU<'a> {
 
     flags: CPUFlags,
 
-    mem: memory_map::MemoryMap<'a>,
+    mem: memory_map::MemoryMap,
 
     jmp_bug: bool,
     decimal_mode_enabled: bool
 }
 
-impl<'a> CPU<'a> {
+impl CPU {
     pub fn new() -> Self {
         let flags = CPUFlags::new();
         let mem = memory_map::MemoryMap::new();
@@ -138,8 +138,8 @@ impl<'a> CPU<'a> {
         // self.mem.reset();
     }
 
-    pub fn mount_mapper(&mut self, mem_range: Range<usize>, mapper: &'a mut [u8]) {
-        self.mem.register_mapper(mem_range, mapper);
+    pub fn mount_in_bus(&mut self, mem_range: Range<usize>, device: impl memory_map::MemMappeable + 'static) {
+        self.mem.register_device(mem_range, device);
     }
 
     pub fn exec(&mut self, from_address: Option<u16>) -> Result<(), &str> {
@@ -625,7 +625,7 @@ impl<'a> CPU<'a> {
     fn pop_st_16(&mut self) -> u16 {
         let lo = self.pop_st_8();
         let hi = self.pop_st_8();
-        (((hi as u16) << 8) | lo as u16)
+        ((hi as u16) << 8) | lo as u16
     }
 
     fn push_st_8(&mut self, value: u8) -> u8 {
@@ -749,7 +749,7 @@ impl<'a> CPU<'a> {
     }
 }
 
-impl<'a> fmt::Debug for CPU<'a> {
+impl fmt::Debug for CPU {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<a: {:02x}, x: {:02x}, y: {:02x}, flags: {:?}, sp: {:02x}, pc: {:04x}>",
             self.a, self.x, self.y, self.flags, self.sp, self.pc)

@@ -10,19 +10,25 @@ pub mod memory_map {
     pub const INTVECADR : u16 = 0xfffe;
     pub const RESETVECADR : u16 = 0xfffc;
 
-    pub struct MemoryMap<'a> {
-        mappers: HashMap<Range<usize>, RefCell<&'a mut [u8]>>,
+    pub trait MemMappeable {
+        fn read(&self, address: usize) -> u8;
+        fn slice(&self, from: usize) -> &[u8];
+        fn write(&mut self, address: usize, value: u8) -> u8;
     }
 
-    impl<'a> MemoryMap<'a> {
-        pub fn new() -> MemoryMap<'a> {
+    pub struct MemoryMap {
+        devices: HashMap<Range<usize>, RefCell<Box<dyn MemMappeable>>>,
+    }
+
+    impl MemoryMap {
+        pub fn new() -> MemoryMap {
             MemoryMap {
-                mappers: HashMap::new()
+                devices: HashMap::new(),
             }
         }
 
-        pub fn register_mapper(&mut self, mem_range: Range<usize>, mapper: &'a mut [u8]) {
-            self.mappers.insert(mem_range, RefCell::new(mapper));
+        pub fn register_device(&mut self, mem_range: Range<usize>, device: impl MemMappeable + 'static) {
+            self.devices.insert(mem_range, RefCell::new(Box::new(device)));
         }
 
         pub fn push_to_stack(&mut self, sp: u8, value: u8) -> u8 {
@@ -35,33 +41,30 @@ pub mod memory_map {
         }
 
         pub fn read(&self, address: u16) -> u8 {
-            self.mapper_for(address).borrow()[self.address_inside_mapper(address) as usize]
+            self.device_for(address).borrow().read(self.address_inside_device(address))
         }
 
         pub fn write(&mut self, address: u16, value: u8) -> u8 {
-            self.mapper_for(address).borrow_mut()[self.address_inside_mapper(address) as usize] = value;
-            value
+            self.device_for(address).borrow_mut().write(self.address_inside_device(address), value)
         }
 
         pub fn fetch_instruction(&self, address: u16) -> Option<Instruction> {
-            let program_sector = self.mapper_for(address).borrow();
-            let chunk = &program_sector[self.address_inside_mapper(address) as usize..program_sector.len()];
-            Instruction::build(chunk)
+            Instruction::build(self.device_for(address).borrow().slice(self.address_inside_device(address)))
         }
 
-        pub fn mapper_for(&self, address: u16) -> &RefCell<&'a mut [u8]> {
+        pub fn device_for(&self, address: u16) -> &RefCell<Box<dyn MemMappeable>> {
             let address = address as usize;
-            for (mem_range, mapper) in &self.mappers {
+            for (mem_range, device) in &self.devices {
                 if mem_range.contains(&address) {
-                    return mapper
+                    return device
                 }
             }
             panic!("Invalid access from 0x{:04x}", address)
         }
 
-        fn address_inside_mapper(&self, address: u16) -> usize {
+        fn address_inside_device(&self, address: u16) -> usize {
             let address = address as usize;
-            for (mem_range, _) in &self.mappers {
+            for (mem_range, _) in &self.devices {
                 if mem_range.contains(&address) {
                     return address - mem_range.start
                 }
@@ -71,11 +74,11 @@ pub mod memory_map {
 
     }
 
-    impl<'a> fmt::Debug for MemoryMap<'a> {
+    impl fmt::Debug for MemoryMap {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "Memory Dump:\n")?;
             write!(f, "================================================================================\n")?;
-            let mut mem_ranges : Vec<_> = self.mappers.keys().clone().into_iter().collect();
+            let mut mem_ranges : Vec<_> = self.devices.keys().clone().into_iter().collect();
             mem_ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
             for mem_range in mem_ranges  {
                 let mem_range : Vec<_> = mem_range.clone().collect();
