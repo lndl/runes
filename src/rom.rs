@@ -3,9 +3,11 @@ use std::io::Result;
 use std::io::Read;
 use std::fmt;
 
+use mos6502::memory_map::memory_map::MemMappeable;
+
 #[derive(Debug)]
 enum RomVersion {
-    iNes,
+    INes,
     Nes2,
     Unknown
 }
@@ -29,14 +31,14 @@ impl fmt::Debug for PGRROM {
     PGR {{
         LSB Banks: {},
         MSB Banks: {},
-        Data: <first 5 bytes: {:?}..., count: {} bytes>
+        Data: <first 16 bytes: {:?}..., count: {} bytes>
     }}
         "#, self.lsb_banks, self.msb_banks,
-        &self.data[0..5], self.data.len())
+        &self.data[0..16], self.data.len())
     }
 }
 
-struct CHRROM {
+pub struct CHRROM {
     lsb_banks: u8,
     msb_banks: u8,
     data: Vec<u8>
@@ -48,10 +50,10 @@ impl fmt::Debug for CHRROM {
     CHR {{
         LSB Banks: {},
         MSB Banks: {},
-        Data: <first 5 bytes: {:?}..., count: {} bytes>
+        Data: <first 16 bytes: {:?}..., count: {} bytes>
     }}
         "#, self.lsb_banks, self.msb_banks,
-        &self.data[0..5], self.data.len())
+        &self.data[0..16], self.data.len())
     }
 }
 
@@ -60,6 +62,7 @@ pub struct Rom {
     trainer: Option<Vec<u8>>,
     pgrrom: PGRROM,
     chrrom: CHRROM,
+    mapper: u8,
     flag6: u8,
     flag7: u8,
     pgrram_banks: u8,
@@ -74,17 +77,26 @@ ROM {{
     trainer: {:?},
     PGR-ROM: {:?},
     CHR-ROM: {:?},
+    mapper: {},
     flag6: {:08b},
     flag7: {:08b},
     PGR-RAM banks: {:?},
     TV System: {:?}
 }}
-        "#, self.format, self.trainer, self.pgrrom, self.chrrom,
+        "#, self.format, self.trainer, self.pgrrom, self.chrrom, self.mapper,
         self.flag6, self.flag7, self.pgrram_banks, self.tv_system)
     }
 }
 
 impl Rom {
+    pub fn chrrom_info(&self) -> &Vec<u8> {
+        &self.chrrom.data
+    }
+
+    pub fn pgrrom_info(&self) -> &Vec<u8> {
+        &self.pgrrom.data
+    }
+
     pub fn from_file(filename: String) -> Result<Rom> {
         let mut file = File::open(&filename)?;
         let mut data = Vec::new();
@@ -103,6 +115,7 @@ impl Rom {
                 msb_banks: data[9] & 0xF0,
                 data: Self::chrrom_data(&data)
             },
+            mapper: Self::parse_mapper(&data),
             flag6: data[6],
             flag7: data[7],
             pgrram_banks: data[8],
@@ -110,6 +123,10 @@ impl Rom {
         };
 
         return Ok(new_rom);
+    }
+
+    fn parse_mapper(data: &Vec<u8>) -> u8 {
+        (data[7] & 0xf0) | (data[6] >> 4)
     }
 
     fn guess_version(data: &Vec<u8>) -> RomVersion {
@@ -120,7 +137,7 @@ impl Rom {
             if nes2_ext {
                 RomVersion::Nes2
             } else {
-                RomVersion::iNes
+                RomVersion::INes
             }
         } else {
             RomVersion::Unknown
@@ -165,7 +182,7 @@ impl Rom {
 
     fn pgrrom_data(data: &Vec<u8>) -> Vec<u8> {
         let mut from = 16;
-        let mut to = Self::pgrrom_size(data);
+        let mut to = from + Self::pgrrom_size(data);
         if Self::has_trainer(&data) {
             from += 512;
             to += 512;
@@ -181,5 +198,56 @@ impl Rom {
             to += 512;
         }
         data[from..to].to_vec()
+    }
+
+    pub fn program(&self) -> &[u8] {
+        &self.pgrrom.data
+    }
+
+    pub fn cpu_address_range(&self) -> std::ops::Range<usize> {
+        if self.mapper == 0 {
+            0x6000..0x10000
+        } else {
+            panic!("ERROR: Only supporting ROMs with mapper 0! This ROM is mapper {}!", self.mapper);
+        }
+    }
+
+}
+
+// TODO: Hardcoded Mapper 0!
+impl MemMappeable for Rom {
+    fn read(&self, address: usize) -> u8 {
+        if address < 0x2000 {
+            panic!("I've got no PGRRAM (TODO)!")
+        }
+        else {
+            let translated = address - 0x2000;
+            if address >= 0x2000 && address < 0x4000 {
+                self.program()[translated]
+            } else {
+                let translated = translated - 0x4000;
+                self.program()[translated]
+            }
+        }
+    }
+
+    fn slice(&self, from: usize) -> &[u8] {
+        if from < 0x2000 {
+            panic!("I've got no PGRRAM (TODO)!")
+        }
+        else {
+            let translated = from - 0x2000;
+            if from >= 0x2000 && from < 0x4000 {
+                &self.program()[translated..self.program().len() - 1]
+            } else {
+                let translated = translated - 0x4000;
+                &self.program()[translated..self.program().len() - 1]
+            }
+        }
+    }
+
+    fn write(&mut self, _address: usize, value: u8) -> u8 {
+        // Not going to write in Mapper 0!
+        value
     }
 }

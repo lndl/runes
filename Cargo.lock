@@ -39,6 +39,10 @@ version = "0.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "mos6502"
+version = "0.1.0"
+
+[[package]]
 name = "num"
 version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -183,6 +187,7 @@ dependencies = [
 name = "runes"
 version = "0.0.1"
 dependencies = [
+ "mos6502 0.1.0",
  "sdl2 0.32.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

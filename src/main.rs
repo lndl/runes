@@ -1,10 +1,11 @@
 use std::io::Result;
 
-mod mos6502;
+extern crate mos6502;
+
 use mos6502::cpu::CPU;
 use mos6502::memory_map::memory_map::MemMappeable;
 
-pub mod rom;
+mod rom;
 use rom::Rom;
 
 struct Ram {
@@ -41,7 +42,7 @@ fn main() -> Result<()> {
     // FIXME: Change with proper APU device!
     let apu = Ram::new();
 
-    let rom = Rom::from_file(String::from("nestest.nes"))?;
+    let rom = Rom::from_file(String::from("testroms/nestest.nes"))?;
 
     let mut cpu = CPU::new();
 

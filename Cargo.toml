@@ -7,7 +7,8 @@ authors = [ "laudleon@gmail.com" ]
 name = "runes"
 #path = "window.rs"
 #path = "rom_test.rs"
-path = "main.rs"
+path = "src/main.rs"
 
 [dependencies]
 sdl2 = "0.32.2"
+mos6502 = { path = "mos6502" }
