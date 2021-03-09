@@ -1,3 +1,4 @@
+use mos6502::memory_map::memory_map::{Memorable};
 use rom::Rom;
 
 #[derive(Debug)]
@@ -45,8 +46,84 @@ impl Sprite {
 // RGB notation
 pub struct Color(u8, u8, u8);
 
+// Consts
+pub const SCANLINE_LIMIT: u16 = 340;
+pub const VBLANK_SCANLINE: i16 = 241;
+pub const LAST_SCANLINE: u16 = 261;
+pub const PRE_SCANLINE: i16 = -1;
+
+pub enum PpuStepEval {
+    Normal,
+    NMI
+}
+
+/* PPU Structure */
 pub struct Ppu {
-    screen: [u8; 184320]
+    screen: [u8; 184320],
+
+    control: u8,
+    mask: u8,
+    status: u8,
+    oamaddress: u8,
+    oamdata: u8,
+    scroll: u16,
+    address: u16,
+    data: u8,
+
+    is_scroll_low: bool,
+    is_address_low: bool,
+
+    scanline: i16,
+    cycles: u16,
+}
+
+impl Memorable for Ppu {
+    fn read(&self, address: usize) -> u8 {
+        match address % 8 {
+            0 => self.control,
+            1 => self.mask,
+            2 => self.status,
+            3 => self.oamaddress,
+            4 => self.oamdata,
+            5 => (self.scroll & 0x00ff) as u8,
+            6 => (self.address & 0x00ff) as u8,
+            7 => self.data,
+            _ => panic!("lalala")
+        }
+    }
+
+    fn slice(&self, _from: usize) -> &[u8] {
+        panic!("Slice operation for PPU has no sense!");
+    }
+
+    fn write(&mut self, address: usize, value: u8) -> u8 {
+        match address % 8 {
+            0 => self.control    = value,
+            1 => self.mask       = value,
+            2 => panic!("Can't write PPUSTATUS!"),
+            3 => self.oamaddress = value,
+            4 => self.oamdata    = value,
+            5 => {
+                if self.is_scroll_low {
+                    self.scroll = value as u16;
+                } else {
+                    self.scroll = (self.scroll << 8) | value as u16;
+                }
+                self.is_scroll_low = !self.is_scroll_low;
+            },
+            6 => {
+                if self.is_address_low {
+                    self.address = value as u16;
+                } else {
+                    self.address = (self.address << 8) | value as u16;
+                }
+                self.is_address_low = !self.is_address_low;
+            },
+            7 => self.data       = value,
+            _ => panic!("lalala")
+        };
+        value
+    }
 }
 
 impl Ppu {
@@ -61,7 +138,56 @@ impl Ppu {
 
     pub fn new() -> Self {
         Ppu {
-            screen: [0; 184320]
+            screen: [0; 184320],
+
+            control: 0,
+            mask: 0,
+            status: 0,
+            oamaddress: 0,
+            oamdata: 0,
+            scroll: 0,
+            address: 0,
+            data: 0,
+
+            is_scroll_low: true,
+            is_address_low: true,
+
+            scanline: 240,
+            cycles: 0,
+        }
+    }
+
+    pub fn step(&mut self) -> PpuStepEval {
+        if self.cycles > SCANLINE_LIMIT {
+            self.cycles = 0;
+            self.scanline += 1;
+        }
+
+        if self.scanline == PRE_SCANLINE && self.cycles == 1 {
+            self.set_vblank(false);
+        }
+
+        if self.scanline == VBLANK_SCANLINE && self.cycles == 1 {
+            self.set_vblank(true);
+            if self.control & 0x80 == 1 {
+                return PpuStepEval::NMI
+            }
+	}
+
+        if self.scanline == LAST_SCANLINE as i16 {
+            self.scanline = -1;
+        }
+
+        self.cycles += 1;
+
+        PpuStepEval::Normal
+    }
+
+    fn set_vblank(&mut self, on: bool) {
+        if on {
+            self.status |= 0x80;
+        } else {
+            self.status &= 0x7F;
         }
     }
 

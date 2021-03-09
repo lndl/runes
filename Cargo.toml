@@ -5,10 +5,12 @@ authors = [ "laudleon@gmail.com" ]
 
 [[bin]]
 name = "runes"
-#path = "window.rs"
-#path = "rom_test.rs"
 path = "src/main.rs"
 
 [dependencies]
-sdl2 = "0.32.2"
 mos6502 = { path = "mos6502" }
+
+[dependencies.sdl2]
+version = "0.34"
+default-features = false
+features = ["ttf"]

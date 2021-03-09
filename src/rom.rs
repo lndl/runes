@@ -3,7 +3,7 @@ use std::io::Result;
 use std::io::Read;
 use std::fmt;
 
-use mos6502::memory_map::memory_map::MemMappeable;
+use mos6502::memory_map::memory_map::{Memorable};
 
 #[derive(Debug)]
 enum RomVersion {
@@ -215,34 +215,25 @@ impl Rom {
 }
 
 // TODO: Hardcoded Mapper 0!
-impl MemMappeable for Rom {
+impl Memorable for Rom {
     fn read(&self, address: usize) -> u8 {
         if address < 0x2000 {
-            panic!("I've got no PGRRAM (TODO)!")
+            // panic!("I've got no PGRRAM (TODO)!")
+            0
         }
         else {
-            let translated = address - 0x2000;
-            if address >= 0x2000 && address < 0x4000 {
-                self.program()[translated]
-            } else {
-                let translated = translated - 0x4000;
-                self.program()[translated]
-            }
+            self.program()[(address - 0x2000) % 0x4000]
         }
     }
 
     fn slice(&self, from: usize) -> &[u8] {
         if from < 0x2000 {
-            panic!("I've got no PGRRAM (TODO)!")
+            // panic!("I've got no PGRRAM (TODO)!")
+            &[0]
         }
         else {
-            let translated = from - 0x2000;
-            if from >= 0x2000 && from < 0x4000 {
-                &self.program()[translated..self.program().len() - 1]
-            } else {
-                let translated = translated - 0x4000;
-                &self.program()[translated..self.program().len() - 1]
-            }
+            let translated = (from - 0x2000) % 0x4000;
+            &self.program()[translated..self.program().len() - 1]
         }
     }
 
